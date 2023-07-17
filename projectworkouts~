@@ -1,0 +1,322 @@
+Start the Following Eco systems
+
+Login and start mysql service:
+
+sudo su mysql;
+password:hduser
+
+service mysqld start
+
+exit
+
+MYSQL - Preparing the Source DB data ready:
+
+Login to mysql using root user:
+
+mysql -u root -p
+password: root
+
+mysql
+
+Run the below sqls to create and load data in the tables created in the below schemas
+ordersproduct_ORIG.sql - Schema: ordersproducts, Tables: orders, products, orderdetails
+custpayments_ORIG.sql - Schema: custpayments, Tables: custpayments and paymentspayments
+empoffice.sql - Schema: empoffice, Tables: employees and offices
+
+source /home/hduser/retailorders/ordersproduct_ORIG.sql
+source /home/hduser/retailorders/custpayments_ORIG.sql
+source /home/hduser/retailorders/empoffice.sql
+
+
+SQOOP -
+
+Create a password file adding root as password:
+
+echo -n "root" > ~/root.password
+
+Create the below directories in hdfs and place the password file
+hadoop fs -mkdir /user/hduser/retailorders/
+hadoop fs -put ~/root.password /user/hduser/retailorders/root.password
+hadoop dfs -chown 400 /user/hduser/retailorders/root.password
+
+
+Run the below Sqoop import commands with options file, password file, boundary query, query, split by, delete target directory, null string, direct mode, ~ delimiter, reading without splitby column with primary key as split by
+
+sqoop --options-file /home/hduser/retailorders/empofficeoption --password-file /user/hduser/retailorders/root.password -table employees -m 2 --delete-target-dir --target-dir employees/ --fields-terminated-by '~' --lines-terminated-by '\n';
+
+sqoop --options-file /home/hduser/retailorders/empofficeoption --password-file /user/hduser/retailorders/root.password -table offices -m 1 --delete-target-dir --target-dir offices/  --fields-terminated-by '~' --lines-terminated-by '\n';
+
+sqoop --options-file /home/hduser/retailorders/custoption --password-file /user/hduser/retailorders/root.password --boundary-query "
+select min(customerNumber), max(customerNumber) from payments " --query 'select c.customerNumber,
+upper(c.customerName),c.contactFirstName,c.contactLastName,c.phone,c.addressLine1,c.city,c.state,c.postalCode,c.country ,
+c.salesRepEmployeeNumber,c.creditLimit ,p.checknumber,p.paymentdate,p.amount 
+from customers c inner join payments p on c.customernumber=p.customernumber 
+where $CONDITIONS' \
+--split-by c.customernumber --delete-target-dir --target-dir custdetails/2016-10/ --null-string 'NA' \
+--direct --num-mappers 2 --fields-terminated-by '~' --lines-terminated-by '\n';
+
+sqoop --options-file /home/hduser/retailorders/ordersoption --password-file /user/hduser/retailorders/root.password --boundary-query "select min(customerNumber), max(customerNumber) from orders" --query 'select o.customernumber,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,od.productcode,od.quantityordered,od.priceeach,
+od.orderlinenumber,p.productCode ,p.productName,p.productLine,p.productScale,p.productVendor,p.productDescription,p.quantityInStock,
+p.buyPrice,p.MSRP 
+from orders o inner join orderdetails od on o.ordernumber=od.ordernumber 
+inner join products p on od.productCode=p.productCode where $CONDITIONS' \
+--split-by o.customernumber --delete-target-dir --target-dir orderdetails/2016-10/ --null-string 'NA' \
+--direct --num-mappers 4 --fields-terminated-by '~' --lines-terminated-by '\n';
+
+
+PIG - 
+
+Login to Pig 
+1. Load the cust and order details data data from the sqoop imported location
+2. Convert the custdetails data into complex data types (struct in hive) and store in a hdfs location.
+3. Read the order details data into pig relation to reduce/change the order of columns extracted from the database.
+4. Store the output into pigout/custdetcomplextypes and pigout/orddetails/ locations in HDFS.
+
+pig -x mapreduce
+
+custdetails = load '/user/hduser/custdetails/2016-10' USING PigStorage ('~') as (customerNumber:chararray,customerName:chararray, contactFirstName:chararray,contactLastName:chararray,phone:chararray,addressLine1:chararray,city:chararray,state:chararray,postalCode:chararray,counrtry:chararray,
+salesRepEmployeeNumber:chararray,creditLimit:chararray,checknumber:chararray,paymentdate:chararray,amount:chararray) ;
+
+custdetcomplextypes = foreach custdetails generate CONCAT(customerNumber,'~',customerName,'~',CONCAT(contactFirstName,' ',contactLastName),'~',CONCAT(addressLine1,'$',city,'$',state,'$',postalCode,'$',counrtry,'$',phone),'~',creditLimit,'~',checknumber,'~',amount,'~',paymentdate);
+
+store custdetcomplextypes into '/user/hduser/pigout/custdetcomplextypes' using PigStorage ('~');
+
+orderdetails = load '/user/hduser/orderdetails/2016-10' USING PigStorage ('~') as (customernumber:chararray,ordernumber:chararray, orderdate:chararray,shippeddate:chararray,status:chararray,comments:chararray,productcode:chararray,quantityordered:chararray,priceeach:chararray,orderlinenumber:chararray,
+productCode:chararray,productName:chararray,productLine:chararray,productScale:chararray,productVendor:chararray,productDescription:chararray,quantityInStock:chararray,
+buyPrice:chararray,MSRP:chararray) ;
+
+orddetcomplextypes = foreach orderdetails generate customernumber,ordernumber,shippeddate,status,comments,productcode,quantityordered,priceeach,orderlinenumber,productName,productLine,
+productScale,productVendor,productDescription,quantityInStock,buyPrice,MSRP,orderdate;
+
+store orddetcomplextypes into '/user/hduser/pigout/orddetails/' using PigStorage ('~');
+
+5. load and convert the custdetails data to array data and Store into HDFS location.
+
+custpaymentcomplextypes = foreach custdetails generate CONCAT(customerNumber,'~',checknumber,'~',CONCAT(creditLimit,'$',amount),'~',paymentdate);
+
+store custpaymentcomplextypes into '/user/hduser/pigout/custpaymentcomplextypes' using PigStorage ('~');
+
+6. Filter the custdetails complex data which has non zero amounts.
+7. Split based on the amount of the product, reorder the columns, union and store the output into HDFS.
+
+custfiltered = filter custdetails by (int)amount > 0;
+
+SPLIT custfiltered INTO highamt IF ( (int)amount>50000 ) , midamt IF ( (int)amount <50000 AND (int)amount > 10000), lowamt IF ((int)amount<10000);
+
+lamt = foreach lowamt generate $0,$12,$14,'lowamt',$13;
+mamt = foreach midamt generate $0,$12,$14,'midamt',$13;
+hamt = foreach highamt generate $0,$12,$14,'highamt',$13;
+allamt = UNION lamt,mamt,hamt;
+
+store allamt into '/user/hduser/pigout/allamt' using PigStorage ('~');
+
+HIVE -
+
+Ensure Mysql is running:
+
+sudo su mysql
+password: hduser
+
+service mysqld start
+exit
+
+hive --service metastore
+
+hive
+
+-- Create a Staging Database to create managed temporary tables to create final tables.
+
+create database retail_stg;
+use retail_stg;
+
+drop table if exists order_rate;
+
+create table order_rate (rid int,orddesc varchar(200),comp_cust varchar(10),siverity int) row format delimited fields terminated by ',';
+
+load data local inpath '/home/hduser/retailorders/orders_rate.csv' overwrite into table order_rate;
+
+select o.customernumber,o.comments,r.orddesc,siverity from orddetstg o left outer join order_rate r 
+where o.comments like concat('%',r.orddesc,'%');
+
+-- Load the Pig output data into the below managed tables that will be dropped and recreated on daily basis.
+
+drop table if exists custdetstg;
+
+create table custdetstg(customernumber STRING, customername STRING, contactfullname string, address struct<addressLine1:string,city:string,state:string,postalCode:bigint,counrtry:string,phone:bigint>,creditlimit float,checknum string,checkamt int,paymentdate date)
+row format delimited
+fields terminated by '~'
+collection items terminated by '$'
+stored as textfile;
+
+load data inpath '/user/hduser/pigout/custdetcomplextypes/' overwrite into table custdetstg;
+
+
+drop table if exists orddetstg;
+
+create table orddetstg(customernumber STRING, ordernumber STRING, shippeddate date,status string, comments string,productcode string,quantityordered int,priceeach decimal(10,2),orderlinenumber int,productName STRING,productLine STRING,
+productScale STRING,productVendor STRING,productDescription STRING,quantityInStock int,buyPrice decimal(10,2),MSRP decimal(10,2),orderdate date)
+row format delimited
+fields terminated by '~'
+stored as textfile;
+
+load data inpath '/user/hduser/pigout/orddetails/' overwrite into table orddetstg;
+
+
+create database retail_mart;
+use retail_mart;
+
+set hive.enforce.bucketing = true ;
+set map.reduce.tasks = 3;
+set hive.exec.dynamic.partition.mode=nonstrict;
+set hive.exec.dynamic.partition=true;
+
+create external table custpaymentcomplextypes (
+customernumber STRING, checknumber STRING,creditamount array<double>,paymentdate date)
+row format delimited
+fields terminated by '~'
+stored as textfile
+location '/user/hduser/pigout/custpaymentcomplextypes1';
+
+load data inpath '/user/hduser/pigout/custpaymentcomplextypes/' overwrite into table custpaymentcomplextypes1;
+
+
+create external table custdetpartbuckext(customernumber STRING, customername STRING, contactfullname string, address struct<addressLine1:string,city:string,state:string,postalCode:bigint,counrtry:string,phone:bigint>,creditlimit float,checknum string,checkamt int)
+partitioned by (paymentdate date)
+clustered by (customernumber) INTO 3 buckets
+row format delimited
+fields terminated by '~'
+collection items terminated by '$'
+stored as textfile
+location '/user/hduser/custorders/custdetpartbuckext';
+
+insert into table custdetpartbuckext partition(paymentdate) select customernumber,customername, contactfullname, address ,creditlimit,checknum,checkamt,paymentdate from default.custdetstg ;
+
+create external table orddetpartbuckext(customernumber STRING, ordernumber STRING, shippeddate date,status string, comments string,productcode string,quantityordered int,priceeach decimal(10,2),orderlinenumber int,productName STRING,productLine STRING,
+productScale STRING,productVendor STRING,productDescription STRING,quantityInStock int,buyPrice decimal(10,2),MSRP decimal(10,2))
+partitioned by (orderdate date)
+clustered by (customernumber) INTO 3 buckets
+row format delimited
+fields terminated by '~'
+collection items terminated by '$'
+stored as textfile
+location '/user/hduser/custorders/orddetpartbuckext';
+
+insert into table orddetpartbuckext partition(orderdate) select customernumber,ordernumber, shippeddate,status,comments,productcode,quantityordered ,priceeach ,orderlinenumber ,productName ,productLine,
+productScale,productVendor,productDescription,quantityInStock,buyPrice,MSRP,orderdate from default.orddetstg ;
+
+create external table custordpartfinal (
+customernumber STRING, customername STRING, contactfullname string, addressLine1 string,city string,state string,country string,phone bigint,creditlimit float,checknum string,checkamt int,ordernumber STRING, shippeddate date,status string, comments string,productcode string,quantityordered int,priceeach decimal(10,2),orderlinenumber int,productName STRING,productLine STRING,productScale STRING,productVendor STRING,productDescription STRING,quantityInStock int,buyPrice decimal(10,2),MSRP decimal(10,2),orderdate date)
+partitioned by (paymentdate date)
+row format delimited
+fields terminated by '~'
+stored as textfile
+location '/user/hduser/custorders/custordpartfinal';
+
+create index idx_custordpartfinal_phone on table custordpartfinal(phone) AS
+'org.apache.hadoop.hive.ql.index.compact.CompactIndexHandler' WITH DEFERRED REBUILD;
+
+insert into table custordpartfinal partition(paymentdate)
+select cd.customernumber,cd.customername, cd.contactfullname, cd.address.addressLine1,cd.address.city,cd.address.state,cd.address.counrtry,cd.address.phone ,cd.creditlimit,cd.checknum,cd.checkamt,
+o.ordernumber, o.shippeddate,o.status,o.comments,o.productcode,o.quantityordered ,o.priceeach ,o.orderlinenumber ,o.productName ,o.productLine,
+productScale,o.productVendor,o.productDescription,o.quantityInStock,o.buyPrice,o.MSRP,o.orderdate,cd.paymentdate
+from custdetpartbuckext cd inner join orddetpartbuckext o on cd.customernumber=o.customernumber ;
+
+
+ALTER INDEX idx_custordpartfinal_phone ON custordpartfinal REBUILD;
+
+
+cp /usr/local/hbase/lib/hbase-common-0.98.4-hadoop2.jar /usr/local/hive/lib/
+cp /usr/local/hbase/lib/zookeeper-3.4.6.jar /usr/local/hive/lib/
+cp /usr/local/hbase/lib/guava-12.0.1.jar /usr/local/hive/lib/
+cp /usr/local/hbase/lib/hbase-protocol-0.98.4-hadoop2.jar /usr/local/hive/lib/
+cp /usr/local/hbase/lib/hbase-server-0.98.4-hadoop2.jar /usr/local/hive/lib/
+
+
+cd /usr/local/hive/conf/
+mv hive-env.sh.template hive-env.sh
+vi hive-env.sh
+export HIVE_AUX_JARS_PATH=/usr/local/hbase/lib
+
+zkServer.sh start
+start-hbase.sh
+
+
+hive --service metastore
+
+hive --auxpath /usr/local/hive/lib/hive-hbase-handler-0.14.0.jar , /usr/local/hive/lib/hbase-common-0.98.4-hadoop2.jar , /usr/local/hive/lib/zookeeper-3.4.6.jar , /usr/local/hive/lib/guava-12.0.1.jar ,/usr/local/hive/lib/hbase-protocol-0.98.4-hadoop2.jar , /usr/local/hive/lib/hbase-server-0.98.4-hadoop2.jar -hiveconf hbase hbase.master=masternode:60000 hive.root.logger=INFO,console hbase.zookeeper.quorum=localhost:2181
+
+hive>
+add jar /usr/local/hive/lib/hive-hbase-handler-0.14.0.jar;
+add jar /usr/local/hbase/lib/hbase-common-0.98.0-hadoop2.jar;
+add jar /usr/local/hbase/lib/zookeeper-3.4.5.jar;
+add jar /usr/local/hbase/lib/guava-12.0.1.jar;
+add jar /usr/local/hbase/lib/high-scale-lib-1.1.1.jar;
+
+
+CREATE TABLE custordprodtbl (key varchar(100),customernumber varchar(100),productLine varchar(100),state varchar(100),city varchar(100),creditlimit float,checknum varchar(200),checkamt float,ordernumber varchar(200),status varchar(100),
+comments varchar(4000),productcode varchar(100),quantityordered int,priceeach decimal(10,2),productName varchar(1000),buyPrice decimal(10,2),MSRP decimal(10,2),orderdate date,paymentdate date)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,cust:custno,prod:prodline,cust:state,cust:city,cust:creditlimit,cust:checknum,cust:checkamt,ord:ordnum,ord:status,ord:comments,
+prod:prodcd,prod:qty,prod:price,prod:prodname,prod:buyprice,prod:msrp,ord:orddt,cust:paydt")
+TBLPROPERTIES ("hbase.table.name" = "custordprodtbl", "hbase.mapred.output.outputtable" ="custordprodtbl");
+
+insert into table custordprodtbl SELECT reflect("java.util.UUID", "randomUUID") as key,customernumber,productLine,state,city,creditlimit,checknum,checkamt,ordernumber, status,comments,productcode,quantityordered ,priceeach ,productName, buyPrice,MSRP,orderdate,paymentdate
+from custordpartfinal;
+
+
+CREATE TABLE custordprodtbl (key varchar(100),customernumber varchar(200))
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,cust:custno")
+TBLPROPERTIES ("hbase.table.name" = "custordprod2", "hbase.mapred.output.outputtable" ="custordprod2");
+
+
+
+insert into table custordprod2 SELECT reflect("java.util.UUID", "randomUUID") as key,customernumber
+from custordpartfinal;
+
+create TABLE "custordprodtbl" ("key" varchar(100) PRIMARY KEY,"cust"."custno" varchar(100),"prod"."prodline" varchar(100),"cust"."state" varchar(100),"cust"."city" varchar(100),"cust"."creditlimit" float,"cust"."checknum" varchar(200),"cust"."checkamt" float,"ord"."ordnum" varchar(200),"ord"."status" varchar(100),"ord"."comments" varchar(4000),"prod"."prodcd" varchar(100),"prod"."qty" integer,"prod"."price" float,"prod"."prodname" varchar(1000),"prod"."buyprice" float,"prod"."msrp" float,"ord"."orddt" varchar(10),"cust"."paydt" varchar(10));
+
+
+select "cust"."custno","prod"."prodline","cust"."state","cust"."city","cust"."creditlimit","cust"."checkamt","ord"."ordnum","ord"."status","ord"."comments",
+"prod"."prodcd","prod"."qty","prod"."price","prod"."prodname","prod"."buyprice","prod"."msrp","ord"."orddt"
+from "custordprodtbl"
+
+select "cust"."custno","prod"."prodline","cust"."state","cust"."city","cust"."creditlimit","cust"."checkamt"
+from "custordprodtbl" WHERE "ord"."comments" like 'Custom%';
+
+select "cust"."custno","prod"."prodline","cust"."state","cust"."city","cust"."creditlimit","cust"."checkamt",trunc("ord"."comment)
+
+
+,"ord"."ordnum"
+,"ord"."status","ord"."ordnum","ord"."status","ord"."comments"
+
+"prod"."prodcd","prod"."qty","prod"."price","prod"."prodname","prod"."buyprice","prod"."msrp","ord"."orddt","cust"."paydt"
+from "custordprodtbl"
+
+CREATE VIEW vcustordprod10 (key1 varchar(100),"cust".custno varchar(200)) AS SELECT * FROM "custordprod2";
+
+create TABLE "custordprod2" ("key" varchar(100) PRIMARY KEY,"cust"."custno" varchar(200));
+
+CREATE VIEW vcustordprod10 (key1 varchar(100),"cust".custno varchar(200)) AS SELECT * FROM "custordprod2";
+
+create TABLE "custordprod2" ("key" varchar(100) PRIMARY KEY,"cust"."custno" varchar(200));
+
+CREATE VIEW vcustordprod10 (key1 varchar(100),"cust".custno varchar(200)) AS SELECT * FROM "custordprod2";
+
+select "cust"."custno" from vcustordprod10;
+
+drop table "custordprod1";
+
+sqlline.py localhost
+
+create TABLE "phoenix_custordprod" ("key" varchar PRIMARY KEY,"cust"."custno" varchar,"prod"."prodline" varchar,"cust"."state" varchar,"cust"."city" varchar,"cust"."creditlimit" float,"cust"."checknum" varchar,"cust"."checkamt" float,"ord"."ordnum" varchar,"ord"."status" varchar,"ord"."comments" varchar,"prod"."prodcd" varchar,"prod"."qty" integer,"prod"."price" float,"prod"."prodname" varchar,"prod"."buyprice" float,"prod"."msrp" float,"ord"."orddt" varchar,"cust"."paydt" varchar);
+
+create TABLE "hbase_custordprod1" ("key" varchar(200) PRIMARY KEY,"cust"."custno" varchar(100),"prod"."prodline" varchar(200),"cust"."state" varchar(100),"cust"."city" varchar(200),"cust"."creditlimit" float,"cust"."checknum" varchar(200),"cust"."checkamt" float,"ord"."ordnum" varchar(200),"ord"."status" varchar(200),"ord"."comments" varchar(4000),"prod"."prodcd" varchar(200),"prod"."qty" integer,"prod"."price" float,"prod"."prodname" varchar(300),"prod"."buyprice" float,"prod"."msrp" float,"ord"."orddt" varchar(10),"cust"."paydt" varchar(10));
+
+CREATE VIEW custprodview1 (custno VARCHAR, state varchar) AS
+SELECT * FROM "hbase_custordprod1";
+
+
+
+
+

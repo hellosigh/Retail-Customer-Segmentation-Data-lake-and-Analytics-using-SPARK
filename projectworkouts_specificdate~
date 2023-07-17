@@ -1,0 +1,126 @@
+sudo su mysql;
+password:hduser
+service mysqld start
+
+exit
+
+mysql -u root -p
+password: root
+
+mysql
+
+
+source /home/hduser/retailorders/ordersproduct_DDL.sql
+source /home/hduser/retailorders/custpaymentsDDL.sql
+
+
+source /home/hduser/retailorders/ordersproduct_2016-10-01_data.sql
+source /home/hduser/retailorders/custpayments_2016-10-01_data.sql
+
+
+
+		sqoop --options-file /home/hduser/retailorders/ -P -table customers -m 1 --target-dir tmp;
+
+		sqoop --options-file /home/hduser/retailorders/custoption -P -table customers -m 1 --target-dir tmp;
+
+echo -n "root" > ~/root.password
+hadoop fs -mkdir /user/hduser/retailorders/
+hadoop fs -put ~/root.password /user/hduser/retailorders/root.password
+hadoop dfs -chown 400 /user/hduser/retailorders/root.password
+
+sqoop --options-file /home/hduser/retailorders/custoption --password-file /user/hduser/retailorders/root.password --boundary-query "
+select min(customerNumber), max(customerNumber) from payments where paymentdate='2016-10-01'" --query 'select c.customerNumber,
+upper(c.customerName),c.contactFirstName,c.contactLastName,c.phone,c.addressLine1,c.city,c.state,c.postalCode,c.country ,
+c.salesRepEmployeeNumber,c.creditLimit ,p.checknumber,p.paymentdate,p.amount 
+from customers c inner join payments p on c.customernumber=p.customernumber and p.paymentdate='2016-10-01'
+where $CONDITIONS' \
+--split-by c.customernumber --target-dir custdetails/2016-10-01 --null-string 'NA' \
+--direct --num-mappers 2 --fields-terminated-by '~' --lines-terminated-by '\n';
+
+
+sqoop --options-file /home/hduser/retailorders/ordersoption --password-file /user/hduser/retailorders/root.password --boundary-query "select min(customerNumber), max(customerNumber) from orders" --query 'select o.customernumber,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,od.productcode,od.quantityordered,od.priceeach,
+od.orderlinenumber,p.productCode ,p.productName,p.productLine,p.productScale,p.productVendor,p.productDescription,p.quantityInStock,
+p.buyPrice,p.MSRP 
+from orders o inner join orderdetails od on o.ordernumber=od.ordernumber 
+inner join products p on od.productCode=p.productCode where o.orderdate='2016-10-01' and  $CONDITIONS' \
+--split-by o.customernumber --target-dir orderdetails/2016-10-01/ --null-string 'NA' \
+--direct --num-mappers 4 --fields-terminated-by '~' --lines-terminated-by '\n';
+
+
+custdetails = load '/user/hduser/custdetails/2016-10-01' USING PigStorage ('~') as (customerNumber:chararray,customerName:chararray, contactFirstName:chararray,contactLastName:chararray,phone:chararray,addressLine1:chararray,city:chararray,state:chararray,postalCode:chararray,counrtry:chararray,
+salesRepEmployeeNumber:chararray,creditLimit:chararray,checknumber:chararray,paymentdate:chararray,amount:chararray) ;
+
+custdetcomplextypes = foreach custdetails generate CONCAT(customerNumber,'~',customerName,'~',CONCAT(contactFirstName,' ',contactLastName),'~',CONCAT(addressLine1,'$',city,'$',state,'$',postalCode,'$',counrtry,'$',phone),'~',creditLimit,'~',checknumber,'~',amount,'~',paymentdate);
+
+store custdetcomplextypes into '/user/hduser/pigout/custdetcomplextypes/2016-10-01' using PigStorage ('~');
+
+
+custfiltered = filter custdetcomplextypes by (int)amount > 0;
+
+SPLIT custfiltered INTO highamt IF ( (int)amount>50000 ) , midamt IF ( (int)amount <50000 AND (int)amount > 10000), lowamt IF ((int)amount<10000);
+
+lamt = foreach lowamt generate $0,$12,$14,'lowamt',$13;
+mamt = foreach midamt generate $0,$12,$14,'midamt',$13;
+hamt = foreach highamt generate $0,$12,$14,'highamt',$13;
+allamt = UNION lamt,mamt,hamt;
+
+store allamt into '/user/hduser/pigout/allamt/2016-10-01' using PigStorage ('~');
+
+custfiltered = filter custdetcomplextypes by (int)amount > 0;
+
+
+orderdetails = load '/user/hduser/orderdetails/2016-10-01/' USING PigStorage ('~') as (customernumber:chararray,ordernumber:chararray, orderdate:chararray,shippeddate:chararray,status:chararray,comments:chararray,productcode:chararray,quantityordered:chararray,priceeach:chararray,orderlinenumber:chararray,
+productCode:chararray,productName:chararray,productLine:chararray,productScale:chararray,productVendor:chararray,productDescription:chararray,quantityInStock:chararray,
+buyPrice:chararray,MSRP:chararray) ;
+
+orddetcomplextypes = foreach orderdetails generate customernumber,ordernumber,shippeddate,status,comments,productcode,quantityordered,priceeach,orderlinenumber,productName,productLine,
+productScale,productVendor,productDescription,quantityInStock,buyPrice,MSRP,orderdate;
+
+store orddetcomplextypes into '/user/hduser/pigout/orddetails/2016-10-01/' using PigStorage ('~');
+
+
+sudo su mysql
+password: hduser
+
+service mysqld start
+exit
+
+hive --service metastore
+
+hive
+
+
+create database staging;
+
+drop table custdetmanaged;
+
+create table custdetstgpart(customernumber STRING, customername STRING, contactfullname string, address struct<addressLine1:string,city:string,state:string,postalCode:bigint,counrtry:string,phone:bigint>,creditlimit float,checknum string,checkamt int)
+partitioned by (paymentdate date)
+row format delimited
+fields terminated by '~'
+collection items terminated by '$'
+stored as textfile;
+
+load data inpath '/user/hduser/pigout/custdetcomplextypes/2016-10-01/' overwrite into table custdetstgpart partition(paymentdate='2016-01-01');
+
+
+drop table orddetmanaged;
+
+create table orddetstgpart(customernumber STRING, ordernumber STRING, shippeddate date,status string, comments string,productcode string,quantityordered int,priceeach decimal(10,2),orderlinenumber int,productName STRING,productLine STRING,
+productScale STRING,productVendor STRING,productDescription STRING,quantityInStock int,buyPrice decimal(10,2),MSRP decimal(10,2))
+row format delimited
+fields terminated by '~'
+stored as textfile;
+
+load data inpath '/user/hduser/pigout/orddetails/2016-10-01/' overwrite into table orddetstgpart partition(orderdate='2016-01-01');
+
+
+select count(1) from 
+custdetmanaged c inner join orddetmanaged o
+on c.customernumber=o.customernumber
+where c.paymentdate=o.orderdate;
+
+create database retailmart;
+
+
+

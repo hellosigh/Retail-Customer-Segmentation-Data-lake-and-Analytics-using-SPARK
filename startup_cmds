@@ -1,0 +1,7 @@
+sudo su mysql
+service mysqld start
+exit
+
+hive --service metastore
+
+start-all.sh

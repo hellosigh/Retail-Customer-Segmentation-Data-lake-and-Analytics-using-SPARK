@@ -1,0 +1,20 @@
+!/bin/bash
+jps | grep -i namenode
+if [ $? -eq 1 ]; 
+then 
+echo 'starting hadoop'; 
+start-all.sh
+else 
+echo 'hadoop is already running'; 
+fi
+
+service mysqld status
+if [ $? -eq 1 ]; 
+then 
+echo 'starting mysql'; 
+sudo su mysql
+service mysqld start
+exit
+else 
+echo 'mysql is running already'; 
+fi

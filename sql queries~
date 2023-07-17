@@ -1,0 +1,69 @@
+select c.customerNumber,upper(c.customerName),c.contactFirstName,c.contactLastName,c.phone,c.addressLine1,c.city,c.state,c.postalCode,c.country
+,c.salesRepEmployeeNumber,c.creditLimit ,p.checknumber,p.paymentdate,p.amount
+from customers c inner join payments p on c.customernumber=p.customernumber
+where paymentdate='2016-10-01';
+
+
+
+select o.customernumber,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,od.productcode,od.quantityordered,od.priceeach,od.orderlinenumber,p.productCode ,p.productName,p.productLine,p.productScale,p.productVendor,p.productDescription,p.quantityInStock,p.buyPrice,p.MSRP
+from orders o inner join orderdetails od on o.ordernumber=od.ordernumber inner join products p on od.productCode=p.productCode
+
+
+
+SELECT COUNT(1),ORDERNUMBER FROM (
+select c.customerNumber,c.customerName,c.contactFirstName
+,c.contactLastName
+,c.phone,c.addressLine1
+,c.city
+,c.state,
+c.postalCode
+,c.country
+,c.salesRepEmployeeNumber
+,c.creditLimit 
+,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,
+od.productcode,od.quantityordered,od.priceeach,od.orderlinenumber,
+p.checknumber,p.paymentdate,p.amount
+from customers c left outer join orders o on c.customernumber=o.customernumber
+left outer join payments p on c.customernumber=p.customernumber
+left outer join orderdetails od on o.ordernumber=od.ordernumber
+
+ ) AS TEMP1 
+GROUP BY ORDERNUMBER;
+
+
+select c.customerNumber,c.customerName,c.contactFirstName
+,c.contactLastName
+,c.phone,c.addressLine1
+,c.city
+,c.state,
+c.postalCode
+,c.country
+,c.salesRepEmployeeNumber
+,c.creditLimit 
+,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,
+p.checknumber,p.paymentdate,p.amount
+from customers c left outer join orders o on c.customernumber=o.customernumber
+left outer join payments p on c.customernumber=p.customernumber
+where country='GERMANY';
+
+select c.customerNumber,c.customerName,c.contactFirstName,c.contactLastName,c.phone,c.addressLine1,c.city,c.state,c.postalCode,c.country
+,c.salesRepEmployeeNumber,c.creditLimit ,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,
+p.checknumber,p.paymentdate,p.amount
+from customers c left outer join orders o on c.customernumber=o.customernumber
+left outer join payments p on c.customernumber=p.customernumber
+where country='FRANCE';
+
+select c.customerNumber,c.customerName,c.contactFirstName
+,c.contactLastName
+,c.phone,c.addressLine1
+,c.city
+,c.state,
+c.postalCode
+,c.country
+,c.salesRepEmployeeNumber
+,c.creditLimit 
+,o.ordernumber,o.orderdate,o.shippeddate,o.status,o.comments,
+p.checknumber,p.paymentdate,p.amount
+from customers c left outer join orders o on c.customernumber=o.customernumber
+left outer join payments p on c.customernumber=p.customernumber
+where country='USA';

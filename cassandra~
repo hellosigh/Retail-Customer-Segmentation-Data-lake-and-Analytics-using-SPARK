@@ -1,0 +1,27 @@
+cd /home/hduser/retailorders
+tar xvzf Python-2.7.tgz
+echo -e "hduser" | sudo -S mv Python-2.7 /usr/local/python
+cd /usr/local/python
+./configure --prefix=/usr/local
+make
+echo -e "hduser" | sudo -S make install
+tar xvzf apache-cassandra-2.1.22-bin.tar.gz
+echo -e "hduser" | sudo -S mv apache-cassandra-2.1.22 /usr/local/cassandra	
+cd /usr/local/cassandra/bin
+ps -ef | grep cassandra
+
+if [ `ps -ef | grep cassandra | wc -l` -eq 1 ]
+then
+echo "starting cassandra"
+./cassandra
+fi
+
+# start Cassandra
+./cqlsh
+
+#Create Key Space
+
+create keyspace retail WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+use retail;
+create table customer_frustration_level 
+(customernumber text primary key,total_siverity varint,customer_frustration_level text);

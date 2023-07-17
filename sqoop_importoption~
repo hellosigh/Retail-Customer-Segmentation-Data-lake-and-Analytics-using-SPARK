@@ -1,0 +1,6 @@
+import 
+--connect 
+jdbc:mysql://localhost/ordersproducts 
+--username 
+root
+
