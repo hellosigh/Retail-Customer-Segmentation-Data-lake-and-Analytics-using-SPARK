@@ -1,0 +1,16 @@
+1,complaints,comp,-4,complaint
+2,better offer,comp,-1,offer
+3,disputed,cust,-5,complaint
+4,renegotiate,cust,1,offer
+5,mistake,cust,1,complaint
+6,purchase,cust,1,offer
+7,reevaluate,cust,3,purchases
+8,budgeting issues,cust,-2,marketing
+9,concerned,cust,-4,compliant
+10,interested,cust,5,marketing
+11,deliver,comp,0,logistic
+12,shipping,comp,0,logistic
+13,Difficult,cust,-3,complaint
+14,requested,cust,3,marketing
+15,outstanding balance,cust,2,offer
+16,claims,cust,4,offer
